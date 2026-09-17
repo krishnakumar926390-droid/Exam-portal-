@@ -32,6 +32,13 @@
   <style>
     .student-exam-math mjx-container { font-size: 1.05em !important; }
     .student-exam-progress { min-width: 250px; }
+    .result-celebration { position: relative; overflow: hidden; }
+    .confetti-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 5; }
+    .confetti-piece { position: absolute; top: -18px; width: 8px; height: 14px; opacity: 0; animation: confettiFall 2.4s ease-out forwards; }
+    @keyframes confettiFall {
+      0% { transform: translate3d(0,-20px,0) rotate(0deg); opacity: 1; }
+      100% { transform: translate3d(var(--dx), 430px, 0) rotate(720deg); opacity: 0; }
+    }
     @media (max-width: 640px) {
       .student-exam-progress { min-width: 100%; }
     }
@@ -306,6 +313,28 @@
       doc.close();
       printWin.focus();
       setTimeout(function() { printWin.print(); }, 1000);
+    }
+
+    /* ==================== LOCAL PERSISTENCE SAFETY NET ==================== */
+    function cacheKey(type, teacherId) {
+      return `sep_cached_${type}_${teacherId}`;
+    }
+    function readCachedList(type, teacherId) {
+      try {
+        const v = JSON.parse(localStorage.getItem(cacheKey(type, teacherId)) || "[]");
+        return Array.isArray(v) ? v : [];
+      } catch (e) { return []; }
+    }
+    function writeCachedList(type, teacherId, list) {
+      try { localStorage.setItem(cacheKey(type, teacherId), JSON.stringify(Array.isArray(list) ? list : [])); } catch (e) {}
+    }
+    function upsertCachedItem(type, teacherId, item) {
+      if (!teacherId || !item) return;
+      const list = readCachedList(type, teacherId);
+      const key = item.id || item.examCode || (item.examName + "_" + item.createdTimestamp);
+      const idx = list.findIndex(x => (x.id || x.examCode || (x.examName + "_" + x.createdTimestamp)) === key);
+      if (idx >= 0) list[idx] = { ...list[idx], ...item }; else list.push(item);
+      writeCachedList(type, teacherId, list);
     }
 
     /* ==================== API (FIRESTORE) ==================== */
@@ -760,7 +789,14 @@
         secondsUsed: totalSeconds
       };
 
-      await API.submitResult(resultPayload);
+      try {
+        const resultId = await API.submitResult(resultPayload);
+        resultPayload.id = resultId;
+      } catch (cloudErr) {
+        // Keep the result locally even if Cloud is temporarily unavailable.
+        console.warn("Cloud result save failed; local record kept:", cloudErr);
+      }
+      upsertCachedItem("results", ex.teacherId, resultPayload);
       state.lastResult = resultPayload;
       navigate("student-result");
     }
@@ -772,13 +808,20 @@
 
       c.innerHTML = `
         <div class="max-w-xl mx-auto space-y-6">
-          <div id="studentResultCard" class="bg-white p-6 rounded-3xl border shadow-sm text-center space-y-3">
-            <div class="flex justify-center items-center gap-3">
+          <div id="studentResultCard" class="result-celebration bg-white p-6 rounded-3xl border shadow-sm text-center space-y-3">
+            <div id="resultConfetti" class="confetti-layer"></div>
+            <div class="relative z-10 flex justify-center items-center gap-3">
               ${res.teacherPhoto ? `<img src="${res.teacherPhoto}" class="w-12 h-12 rounded-full object-cover border-2 border-indigo-500 shadow" alt="Teacher" />` : ''}
-              <span class="text-4xl">🎉</span>
+              <span class="text-5xl">🎉</span>
+              <span class="text-4xl">🎊</span>
             </div>
-            <h2 class="text-xl font-black text-slate-800">परीक्षा परिणाम (Result)</h2>
-            <p class="text-xs text-slate-500">${res.studentName} (${res.studentClass || res.class})</p>
+            <h2 class="relative z-10 text-xl font-black text-slate-800">परीक्षा परिणाम (Result)</h2>
+            <div class="relative z-10 bg-indigo-50 border border-indigo-100 rounded-2xl p-3 text-left max-w-sm mx-auto">
+              <div class="text-[10px] text-slate-500 font-bold">परीक्षा का नाम</div>
+              <div class="text-base font-black text-indigo-700">${res.examName}</div>
+              <div class="mt-1 text-xs text-slate-600 font-mono">Exam Code: <b>${res.examCode}</b></div>
+            </div>
+            <p class="relative z-10 text-xs text-slate-500">${res.studentName} (${res.studentClass || res.class})</p>
             
             <div class="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-2xl border text-xs max-w-sm mx-auto my-2">
               <div>
@@ -837,7 +880,27 @@
           </div>
         </div>
       `;
-      setTimeout(renderMath, 300);
+      setTimeout(function() {
+        renderMath();
+        launchResultConfetti();
+      }, 150);
+    }
+
+    function launchResultConfetti() {
+      const layer = document.getElementById("resultConfetti");
+      if (!layer) return;
+      layer.innerHTML = "";
+      const pieces = 55;
+      for (let i = 0; i < pieces; i++) {
+        const piece = document.createElement("span");
+        piece.className = "confetti-piece";
+        piece.style.left = (Math.random() * 100) + "%";
+        piece.style.setProperty("--dx", ((Math.random() - 0.5) * 260) + "px");
+        piece.style.animationDelay = (Math.random() * 0.45) + "s";
+        piece.style.background = ["#6366f1", "#8b5cf6", "#f59e0b", "#10b981", "#ef4444", "#06b6d4"][i % 6];
+        piece.style.transform = `rotate(${Math.random() * 360}deg)`;
+        layer.appendChild(piece);
+      }
     }
 
     /* ==================== विद्यार्थी रिकॉर्ड पोर्टल ==================== */
@@ -1257,12 +1320,8 @@
       if (!state.activeTeacher) return navigate("teacher-login");
 
       const teacherId = state.activeTeacher.id;
-      let cachedExams = null;
-      let cachedResults = null;
-      try {
-        cachedExams = JSON.parse(localStorage.getItem("sep_cached_exams_" + teacherId));
-        cachedResults = JSON.parse(localStorage.getItem("sep_cached_results_" + teacherId));
-      } catch (e) {}
+      let cachedExams = readCachedList("exams", teacherId);
+      let cachedResults = readCachedList("results", teacherId);
 
       c.innerHTML = `
         <div class="bg-white p-12 rounded-3xl border shadow-sm text-center space-y-3">
@@ -1280,10 +1339,26 @@
           API.getTeacherExams(teacherId),
           API.getResults(teacherId)
         ]);
-        cachedExams = Array.isArray(fresh[0]) ? fresh[0] : [];
-        cachedResults = Array.isArray(fresh[1]) ? fresh[1] : [];
-        localStorage.setItem("sep_cached_exams_" + teacherId, JSON.stringify(cachedExams));
-        localStorage.setItem("sep_cached_results_" + teacherId, JSON.stringify(cachedResults));
+        const cloudExams = Array.isArray(fresh[0]) ? fresh[0] : [];
+        const cloudResults = Array.isArray(fresh[1]) ? fresh[1] : [];
+        // Merge Cloud + local records so a temporary empty/partial Cloud response
+        // never makes the teacher dashboard show zero records.
+        const examMap = new Map();
+        [...cachedExams, ...cloudExams].forEach(e => {
+          if (!e) return;
+          const k = e.id || e.examCode;
+          if (k) examMap.set(k, { ...(examMap.get(k) || {}), ...e });
+        });
+        const resultMap = new Map();
+        [...cachedResults, ...cloudResults].forEach(r => {
+          if (!r) return;
+          const k = r.id || `${r.examCode}_${r.studentName}_${r.submissionDateTime || r.createdTimestamp}`;
+          resultMap.set(k, { ...(resultMap.get(k) || {}), ...r });
+        });
+        cachedExams = Array.from(examMap.values()).filter(e => !e.isDeleted);
+        cachedResults = Array.from(resultMap.values());
+        writeCachedList("exams", teacherId, cachedExams);
+        writeCachedList("results", teacherId, cachedResults);
       } catch (err) {
         // If Cloud is temporarily unavailable, never replace existing data with [].
         if (Array.isArray(cachedExams) && Array.isArray(cachedResults)) {
@@ -1349,7 +1424,7 @@
 
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div class="bg-white p-4 rounded-2xl border"><span class="text-xs text-slate-500">Active Exams</span><span class="text-2xl font-bold text-indigo-600 block">${exams.length}</span></div>
-            <div class="bg-white p-4 rounded-2xl border"><span class="text-xs text-slate-500">Students</span><span class="text-2xl font-bold text-teal-600 block">${results.length}</span></div>
+            <div class="bg-white p-4 rounded-2xl border"><span class="text-xs text-slate-500">Students</span><span class="text-2xl font-bold text-teal-600 block">${new Set(results.map(r => `${String(r.studentName || '').trim().toLowerCase()}|${String(r.studentClass || r.class || '').trim().toLowerCase()}|${String(r.studentPasscode || '').trim().toLowerCase()}`)).size}</span></div>
           </div>
 
           <div class="bg-white rounded-2xl border p-5 space-y-4">
@@ -1852,10 +1927,10 @@
 
       ex.status = status;
       try {
-        await API.saveExam(ex);
-        localStorage.removeItem("sep_cached_exams_" + state.activeTeacher.id);
-        localStorage.removeItem("sep_cached_results_" + state.activeTeacher.id);
-        alert("परीक्षा सफलतापूर्वक Cloud पर सेव हो गई!");
+        const savedId = await API.saveExam(ex);
+        ex.id = savedId;
+        upsertCachedItem("exams", state.activeTeacher.id, ex);
+        alert("परीक्षा सफलतापूर्वक सेव हो गई!");
         navigate("teacher-dash");
       } catch (err) {
         alert("त्रुटि: " + err.message);
