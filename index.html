@@ -374,6 +374,22 @@
         const snap = await db.collection("exams").where("teacherName", "==", teacherName).get();
         return snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(e => !e.isDeleted);
       },
+      // Historical recovery: older versions of the portal may have saved an exam
+      // with a different teacherId or only the teacher email/name. Read all exam
+      // documents and match every stable teacher identity before showing them.
+      async getTeacherExamsByAllIdentities(profile) {
+        const snap = await db.collection("exams").get();
+        const ids = new Set([String(profile?.id || "").trim()]);
+        const emails = new Set([String(profile?.email || "").trim().toLowerCase()]);
+        const names = new Set([String(profile?.name || "").trim().toLowerCase()]);
+        return snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(e => {
+          if (e.isDeleted) return false;
+          const examId = String(e.teacherId || "").trim();
+          const examEmail = String(e.teacherEmail || e.email || e.createdByEmail || e.ownerEmail || "").trim().toLowerCase();
+          const examName = String(e.teacherName || e.teacher || e.authorName || "").trim().toLowerCase();
+          return (examId && ids.has(examId)) || (examEmail && emails.has(examEmail)) || (examName && names.has(examName));
+        });
+      },
       async getTrashExams(teacherId) {
         const snap = await db.collection("exams")
           .where("teacherId", "==", teacherId)
@@ -435,6 +451,19 @@
         const snap = await db.collection("results").where("teacherName", "==", teacherName).get();
         return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       },
+      // Historical recovery for results saved by older portal versions.
+      async getResultsByAllIdentities(profile) {
+        const snap = await db.collection("results").get();
+        const ids = new Set([String(profile?.id || "").trim()]);
+        const emails = new Set([String(profile?.email || "").trim().toLowerCase()]);
+        const names = new Set([String(profile?.name || "").trim().toLowerCase()]);
+        return snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(r => {
+          const resultId = String(r.teacherId || "").trim();
+          const resultEmail = String(r.teacherEmail || r.email || r.createdByEmail || r.ownerEmail || "").trim().toLowerCase();
+          const resultName = String(r.teacherName || r.teacher || r.authorName || "").trim().toLowerCase();
+          return (resultId && ids.has(resultId)) || (resultEmail && emails.has(resultEmail)) || (resultName && names.has(resultName));
+        });
+      },
       async getResultsByCode(examCode) {
         const snap = await db.collection("results").where("examCode", "==", examCode.trim().toUpperCase()).get();
         return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -463,14 +492,26 @@
         return doc.exists ? { id: doc.id, ...doc.data() } : null;
       },
       async syncTeacherProfileToExams(profile) {
-        const snap = await db.collection("exams").where("teacherId", "==", profile.id).get();
-        const docs = snap.docs.filter(d => !d.data().isDeleted);
-        // Firestore batches are limited to 500 writes.
+        const snap = await db.collection("exams").get();
+        const email = String(profile.email || "").trim().toLowerCase();
+        const name = String(profile.name || "").trim().toLowerCase();
+        const docs = snap.docs.filter(d => {
+          const x = d.data() || {};
+          if (x.isDeleted) return false;
+          const byId = String(x.teacherId || "").trim() === String(profile.id || "").trim();
+          const byEmail = String(x.teacherEmail || x.email || x.createdByEmail || x.ownerEmail || "").trim().toLowerCase() === email;
+          const byName = String(x.teacherName || x.teacher || x.authorName || "").trim().toLowerCase() === name;
+          return byId || byEmail || byName;
+        });
+        // Firestore batches are limited to 500 writes. Also migrate the identity
+        // fields so these historical exams remain linked after future refreshes.
         for (let start = 0; start < docs.length; start += 450) {
           const batch = db.batch();
           docs.slice(start, start + 450).forEach(d => {
             batch.set(d.ref, {
+              teacherId: profile.id,
               teacherName: profile.name || "",
+              teacherEmail: profile.email || "",
               teacherPhoto: profile.photo || ""
             }, { merge: true });
           });
@@ -1358,10 +1399,20 @@
           API.getTeacherExams(teacherId),
           API.getResults(teacherId),
           API.getTeacherExamsByName(state.activeTeacher.name),
-          API.getResultsByTeacherName(state.activeTeacher.name)
+          API.getResultsByTeacherName(state.activeTeacher.name),
+          API.getTeacherExamsByAllIdentities(state.activeTeacher),
+          API.getResultsByAllIdentities(state.activeTeacher)
         ]);
-        const cloudExams = [...(Array.isArray(fresh[0]) ? fresh[0] : []), ...(Array.isArray(fresh[2]) ? fresh[2] : [])];
-        const cloudResults = [...(Array.isArray(fresh[1]) ? fresh[1] : []), ...(Array.isArray(fresh[3]) ? fresh[3] : [])];
+        const cloudExams = [
+          ...(Array.isArray(fresh[0]) ? fresh[0] : []),
+          ...(Array.isArray(fresh[2]) ? fresh[2] : []),
+          ...(Array.isArray(fresh[4]) ? fresh[4] : [])
+        ];
+        const cloudResults = [
+          ...(Array.isArray(fresh[1]) ? fresh[1] : []),
+          ...(Array.isArray(fresh[3]) ? fresh[3] : []),
+          ...(Array.isArray(fresh[5]) ? fresh[5] : [])
+        ];
         // Merge Cloud + local records so a temporary empty/partial Cloud response
         // never makes the teacher dashboard show zero records.
         const examMap = new Map();
