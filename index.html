@@ -29,6 +29,13 @@
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 </head>
 <body class="bg-slate-100 min-h-screen font-sans text-slate-800 flex flex-col">
+  <style>
+    .student-exam-math mjx-container { font-size: 1.05em !important; }
+    .student-exam-progress { min-width: 250px; }
+    @media (max-width: 640px) {
+      .student-exam-progress { min-width: 100%; }
+    }
+  </style>
 
   <header class="bg-gradient-to-r from-indigo-700 via-indigo-600 to-purple-700 text-white shadow-md sticky top-0 z-40">
     <div class="max-w-5xl mx-auto px-4 py-3 flex justify-between items-center">
@@ -111,13 +118,111 @@
     let cropperInstance = null;
     let tempPhotoBase64 = null;
 
-    function renderMath() {
-      if (window.MathJax) {
-        if (window.MathJax.typesetPromise) {
-          window.MathJax.typesetPromise().catch(function(err) { console.log("MathJax error:", err); });
-        } else if (window.MathJax.typeset) {
-          window.MathJax.typeset();
+    /* ==================== SMART MATHEMATICAL RENDERING ====================
+       Supports both proper MathJax input ($...$ / \(...\)) and common
+       plain-text Physics/Math pasted from mobile keyboards.
+    ====================================================================== */
+    function isMathOnlyText(text) {
+      if (!text || /[\u0900-\u097F]/.test(text)) return false;
+      return /[\/^=×÷πθ∞εμλΔΣΩ∑∫√⃗²³⁻₀₁₂₃₄₅₆₇₈₉]/.test(text);
+    }
+
+    function plainMathToTex(text) {
+      let s = String(text || "").trim();
+      if (!s || /(\$[^$]+\$|\\\(|\\\[)/.test(s)) return s;
+
+      // Unicode vector arrow: p⃗ -> \vec{p}
+      s = s.replace(/([A-Za-z])\u20D7/g, "\\vec{$1}");
+
+      // Common Unicode superscripts/subscripts.
+      const sup = {"⁰":"0","¹":"1","²":"2","³":"3","⁴":"4","⁵":"5","⁶":"6","⁷":"7","⁸":"8","⁹":"9","⁺":"+","⁻":"-"};
+      const sub = {"₀":"0","₁":"1","₂":"2","₃":"3","₄":"4","₅":"5","₆":"6","₇":"7","₈":"8","₉":"9","₊":"+","₋":"-"};
+      s = s.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+/g, m => "^{" + [...m].map(x => sup[x]).join("") + "}");
+      s = s.replace(/[₀₁₂₃₄₅₆₇₈₉₊₋]+/g, m => "_{" + [...m].map(x => sub[x]).join("") + "}");
+
+      // Greek symbols frequently pasted without TeX.
+      s = s.replace(/π/g, "\\pi").replace(/θ/g, "\\theta").replace(/ε/g, "\\epsilon")
+           .replace(/μ/g, "\\mu").replace(/λ/g, "\\lambda").replace(/Δ/g, "\\Delta")
+           .replace(/Ω/g, "\\Omega").replace(/∞/g, "\\infty").replace(/√/g, "\\sqrt{}");
+
+      // Make common multiplication look mathematical.
+      s = s.replace(/×/g, "\\times ").replace(/·/g, "\\cdot ");
+
+      // Convert simple fractions, including (a / b), to \frac{a}{b}.
+      s = s.replace(/\(\s*([^()]+?)\s*\/\s*([^()]+?)\s*\)/g, "\\frac{$1}{$2}");
+      s = s.replace(/(^|[\s(])([A-Za-z0-9\\{}.,]+)\s*\/\s*([A-Za-z0-9\\{}.,]+)(?=$|[\s),])/g,
+                    "$1\\frac{$2}{$3}");
+
+      // Common powers typed as x^2 or r^-2.
+      s = s.replace(/([A-Za-z])\^(-?\d+)/g, "$1^{$2}");
+
+      // A few common physics functions.
+      s = s.replace(/\bcos\b/g, "\\cos ").replace(/\bsin\b/g, "\\sin ")
+           .replace(/\btan\b/g, "\\tan ");
+
+      return "\\(" + s + "\\)";
+    }
+
+    function preparePlainMath(root) {
+      if (!root) return;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: function(node) {
+          const parent = node.parentElement;
+          if (!parent || /^(SCRIPT|STYLE|TEXTAREA|INPUT|SELECT|OPTION|BUTTON)$/i.test(parent.tagName)) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          if (!node.nodeValue || !/[\/^×÷πθ∞εμλ⃗²³⁻₀₁₂₃₄₅₆₇₈₉]/.test(node.nodeValue)) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
         }
+      });
+
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+
+      nodes.forEach(function(node) {
+        const value = node.nodeValue;
+        if (!value || /(\$[^$]+\$|\\\(|\\\[)/.test(value)) return;
+
+        // Math-only option/label: render the whole value.
+        if (isMathOnlyText(value.trim())) {
+          const span = document.createElement("span");
+          span.innerHTML = plainMathToTex(value);
+          node.parentNode.replaceChild(span, node);
+          return;
+        }
+
+        // Mixed Hindi + mathematical tokens: preserve Hindi while converting
+        // vectors, powers and common fractions so Physics/Math renders correctly.
+        let replaced = value;
+        replaced = replaced.replace(/([A-Za-z])\u20D7/g, function(_, ch) {
+          return "\\(" + "\\vec{" + ch + "}" + "\\)";
+        });
+        replaced = replaced.replace(/\(\s*([^()]+?)\s*\/\s*([^()]+?)\s*\)/g, function(_, a, b) {
+          return "\\(\\frac{" + a.trim() + "}{" + b.trim() + "}\\)";
+        });
+        // Common simple fraction such as 1 / 4\u03c0\u03b5_0 or 1/2.
+        replaced = replaced.replace(/(^|[\s=:])([0-9]+)\s*\/\s*([0-9A-Za-z\u03c0\u03b5\u03b8_{}\-]+)(?=$|[\s,;.)])/g, function(_, pre, a, b) {
+          return pre + "\\(\\frac{" + a + "}{" + b + "}\\)";
+        });
+        if (replaced !== value) {
+          const span = document.createElement("span");
+          span.textContent = replaced;
+          span.innerHTML = span.textContent;
+          node.parentNode.replaceChild(span, node);
+        }
+      });
+    }
+
+    function renderMath(root) {
+      root = root || document.getElementById("app") || document.body;
+      try { preparePlainMath(root); } catch (e) { console.log("Math preparation error:", e); }
+      if (window.MathJax) {
+        const job = window.MathJax.typesetPromise
+          ? window.MathJax.typesetPromise([root])
+          : (window.MathJax.typeset ? Promise.resolve(window.MathJax.typeset([root])) : Promise.resolve());
+        job.catch(function(err) { console.log("MathJax error:", err); });
       }
     }
     function openModal(title, msg, onConfirm, confirmBtnColor = "bg-rose-600 hover:bg-rose-700") {
@@ -191,7 +296,7 @@
       doc.open();
       doc.write('<!DOCTYPE html><html><head><title>' + titleText + '</title>');
       doc.write('<script src="https://cdn.tailwindcss.com"><\/script>');
-      doc.write('<script>window.MathJax = { loader: { load: ["[tex]/mhchem"] }, tex: { packages: { "[+]": ["mhchem"] }, inlineMath: [["$", "$"]] } };<\/script>');
+      doc.write('<script>window.MathJax = { loader: { load: ["[tex]/mhchem"] }, tex: { packages: { "[+]": ["mhchem"] }, inlineMath: [["$", "$"], ["\\(", "\\)"]], displayMath: [["$$", "$$"], ["\\[", "\\]"]] } };<\/script>');
       doc.write('<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"><\/script>');
       doc.write('<style>@media print { body { padding: 10px; } } body { font-family: sans-serif; background: #fff; }</style>');
       doc.write('</head><body class="p-6">');
@@ -301,7 +406,36 @@
           .get();
         return snap.docs
           .map(doc => ({ id: doc.id, ...doc.data() }))
-          .filter(r => r.studentName.trim().toLowerCase() === name.trim().toLowerCase());
+          .filter(r => String(r.studentName || "").trim().toLowerCase() === name.trim().toLowerCase());
+      },
+      async saveTeacherProfileCloud(profile) {
+        await db.collection("teacherProfiles").doc(profile.id).set({
+          teacherId: profile.id,
+          name: profile.name || "",
+          email: profile.email || "",
+          photo: profile.photo || "",
+          updatedTimestamp: Date.now()
+        }, { merge: true });
+      },
+      async getTeacherProfileCloud(teacherId) {
+        if (!teacherId) return null;
+        const doc = await db.collection("teacherProfiles").doc(teacherId).get();
+        return doc.exists ? { id: doc.id, ...doc.data() } : null;
+      },
+      async syncTeacherProfileToExams(profile) {
+        const snap = await db.collection("exams").where("teacherId", "==", profile.id).get();
+        const docs = snap.docs.filter(d => !d.data().isDeleted);
+        // Firestore batches are limited to 500 writes.
+        for (let start = 0; start < docs.length; start += 450) {
+          const batch = db.batch();
+          docs.slice(start, start + 450).forEach(d => {
+            batch.set(d.ref, {
+              teacherName: profile.name || "",
+              teacherPhoto: profile.photo || ""
+            }, { merge: true });
+          });
+          if (docs.length) await batch.commit();
+        }
       },
       async deleteSingleResult(resId) {
         await db.collection("results").doc(resId).delete();
@@ -379,9 +513,30 @@
         return alert("कृपया अपना नाम, सीक्रेट कोड/पासवर्ड और परीक्षा कोड अवश्य भरें!");
       }
 
-      const exam = await API.getExamByCode(code);
+      let exam;
+      try {
+        exam = await API.getExamByCode(code);
+      } catch (err) {
+        return alert("❌ परीक्षा लोड नहीं हो सकी। इंटरनेट/Firebase कनेक्शन जाँचें।\n" + err.message);
+      }
       if (!exam) return alert("❌ इस कोड (" + code + ") से कोई परीक्षा नहीं मिली! कृपया सही कोड डालें।");
       if (exam.status !== "Published") return alert("यह परीक्षा अभी सक्रिय नहीं है!");
+
+      // Teacher name/photo are stored in the exam. For older exams (or if an
+      // older record missed the photo), also load the teacher profile from Cloud.
+      if (!exam.teacherName || !exam.teacherPhoto) {
+        try {
+          const cloudTeacher = await API.getTeacherProfileCloud(exam.teacherId);
+          if (cloudTeacher) {
+            exam.teacherName = cloudTeacher.name || exam.teacherName || "शिक्षक";
+            exam.teacherPhoto = cloudTeacher.photo || exam.teacherPhoto || "";
+          }
+        } catch (profileErr) {
+          console.log("Teacher profile load skipped:", profileErr);
+        }
+      }
+      exam.teacherName = exam.teacherName || "शिक्षक";
+      exam.teacherPhoto = exam.teacherPhoto || "";
 
       const exClassNorm = (exam.class || "").replace(/\s+/g, '').toLowerCase();
       const stuClassNorm = sClass.replace(/\s+/g, '').toLowerCase();
@@ -433,6 +588,31 @@
       navigate("student-exam");
     }
 
+    function getStudentExamProgress() {
+      const ex = state.activeStudentExam;
+      const data = state.studentData;
+      if (!ex || !data) return { total: 0, answered: 0, remaining: 0, correct: 0, marks: 0, totalMarks: 0 };
+      const total = ex.questions.length;
+      const answered = Object.keys(data.answers || {}).filter(k => data.answers[k] !== undefined).length;
+      let correct = 0;
+      ex.questions.forEach((q, i) => {
+        if (data.answers[i] === q.correctAnswer) correct++;
+      });
+      const marksPerQ = ex.marksPerQuestion || 1;
+      return { total, answered, remaining: total - answered, correct, marks: correct * marksPerQ, totalMarks: total * marksPerQ };
+    }
+
+    function updateStudentExamProgress() {
+      const p = getStudentExamProgress();
+      const el = document.getElementById("studentExamProgress");
+      if (!el) return;
+      el.innerHTML = `
+        <span>कुल प्रश्न: <b>${p.total}</b></span>
+        <span>उत्तर दिए: <b>${p.answered}</b></span>
+        <span>बाकी प्रश्न: <b>${p.remaining}</b></span>
+      `;
+    }
+
     function renderStudentExam(c) {
       const ex = state.activeStudentExam;
       if (!ex) return navigate("student-home");
@@ -440,22 +620,30 @@
       const isLimited = ex.timingType === "limited" && ex.durationMinutes > 0;
       const initialTimerText = isLimited ? `⏱️ ${ex.durationMinutes}:00` : `⏱️ 0:00`;
       const teacherPhoto = ex.teacherPhoto || "";
+      const p = getStudentExamProgress();
 
       c.innerHTML = `
-        <div class="space-y-4">
-          <div class="bg-white p-4 rounded-2xl border shadow-sm flex justify-between items-center sticky top-16 z-30">
-            <div class="flex items-center gap-3">
-              ${teacherPhoto ? `<img src="${teacherPhoto}" class="w-10 h-10 rounded-full object-cover border-2 border-indigo-500 shadow-sm" alt="Teacher" />` : ''}
-              <div>
-                <h2 class="font-black text-slate-800 text-base md:text-lg">${ex.examName}</h2>
-                <span class="text-xs text-slate-500">${state.studentData.name} (${state.studentData.sClass}) • By: ${ex.teacherName || 'शिक्षक'}</span>
+        <div class="space-y-4 student-exam-math">
+          <div class="bg-white p-3 md:p-4 rounded-2xl border shadow-sm sticky top-16 z-30 space-y-3">
+            <div class="flex flex-wrap justify-between items-center gap-3">
+              <div class="flex items-center gap-3 min-w-0">
+                ${teacherPhoto ? `<img src="${teacherPhoto}" class="w-16 h-16 md:w-18 md:h-18 rounded-full object-cover border-3 border-indigo-500 shadow-md shrink-0 bg-white" alt="Teacher Photo" />` : `<div class="w-16 h-16 rounded-full bg-indigo-50 border-2 border-indigo-200 flex items-center justify-center text-2xl shrink-0">👨‍🏫</div>`}
+                <div class="min-w-0">
+                  <h2 class="font-black text-slate-800 text-base md:text-lg">${ex.examName}</h2>
+                  <div class="text-base md:text-lg font-black text-indigo-700 mt-0.5">शिक्षक: ${ex.teacherName || 'शिक्षक'}</div>
+                  <div class="text-xs text-slate-500 mt-0.5">${state.studentData.name} (${state.studentData.sClass})</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span id="timerDisplay" class="font-mono font-bold ${isLimited ? 'text-rose-600 bg-rose-50 border-rose-200' : 'text-indigo-600 bg-indigo-50 border-indigo-200'} border px-3 py-2 rounded-xl text-xs">${initialTimerText}</span>
+                <button onclick="confirmSubmitExam()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded-xl shadow">सबमिट करें</button>
               </div>
             </div>
-            <div class="flex items-center gap-3">
-              <span id="timerDisplay" class="font-mono font-bold ${isLimited ? 'text-rose-600 bg-rose-50 border-rose-200' : 'text-indigo-600 bg-indigo-50 border-indigo-200'} border px-3 py-1.5 rounded-xl text-xs">
-                ${initialTimerText}
-              </span>
-              <button onclick="confirmSubmitExam()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded-xl shadow">सबमिट करें</button>
+
+            <div id="studentExamProgress" class="student-exam-progress flex flex-wrap gap-2 text-[11px] md:text-xs font-bold bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-xl px-3 py-2">
+              <span>कुल प्रश्न: <b>${p.total}</b></span>
+              <span>उत्तर दिए: <b>${p.answered}</b></span>
+              <span>बाकी प्रश्न: <b>${p.remaining}</b></span>
             </div>
           </div>
 
@@ -463,7 +651,7 @@
             ${ex.questions.map((q, i) => `
               <div class="bg-white p-5 rounded-2xl border space-y-3" id="qCard_${i}">
                 <div class="font-bold text-sm text-slate-800 flex items-start gap-2">
-                  <span class="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded-md">Q${i+1}</span>
+                  <span class="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded-md shrink-0">Q${i+1}</span>
                   <div class="flex-1">${q.questionText}</div>
                 </div>
                 <div class="grid md:grid-cols-2 gap-2 text-xs pt-1">
@@ -480,7 +668,7 @@
           </div>
         </div>
       `;
-      setTimeout(renderMath, 300);
+      setTimeout(function() { renderMath(); updateStudentExamProgress(); }, 100);
     }
 
     function selectStudentAnswer(qIdx, optIdx) {
@@ -495,6 +683,7 @@
           }
         });
       }
+      updateStudentExamProgress();
     }
 
     function confirmSubmitExam() {
@@ -698,7 +887,13 @@
 
       if (!name || !sPass) return alert("कृपया नाम, वर्ग और सीक्रेट कोड तीनों भरें!");
 
-      const records = await API.getStudentPortalRecords(name, sClass, sPass);
+      let records;
+      try {
+        records = await API.getStudentPortalRecords(name, sClass, sPass);
+      } catch (err) {
+        return alert("❌ Student Portal लोड नहीं हो सका।\nइंटरनेट/Firebase कनेक्शन और Firestore Rules जाँचें।\n\n" + err.message);
+      }
+
       if (records.length === 0) {
         return alert("❌ कोई रिकॉर्ड नहीं मिला!\nकृपया सुनिश्चित करें कि नाम, वर्ग और सीक्रेट कोड बिल्कुल सही हैं।");
       }
@@ -745,6 +940,7 @@
           </div>
         </div>
       `;
+      setTimeout(renderMath, 100);
     }
 
     /* ==================== TEACHER AUTH ==================== */
@@ -775,13 +971,17 @@
       `;
     }
 
-    function handleTeacherLogin() {
-      const email = document.getElementById("tEmail").value.trim();
+    async function handleTeacherLogin() {
+      const email = document.getElementById("tEmail").value.trim().toLowerCase();
       const pass = document.getElementById("tPass").value.trim();
 
       if (!email || !pass) return alert("कृपया ईमेल और पासवर्ड भरें!");
 
-      const savedAuth = JSON.parse(localStorage.getItem("teacher_auth_" + email)) || {};
+      let savedAuth = {};
+      try {
+        savedAuth = JSON.parse(localStorage.getItem("teacher_auth_" + email)) || {};
+      } catch (e) {}
+
       if (savedAuth.password && savedAuth.password !== pass) {
         return alert("गलत पासवर्ड! कृपया सही पासवर्ड दर्ज करें।");
       }
@@ -789,7 +989,7 @@
       const displayName = savedAuth.name || email.split("@")[0];
       const photo = savedAuth.photo || "";
       const teacher = {
-        id: "TCHR_" + btoa(email).substring(0, 8),
+        id: "TCHR_" + btoa(unescape(encodeURIComponent(email))).substring(0, 12),
         name: displayName,
         email: email,
         photo: photo
@@ -801,6 +1001,16 @@
 
       state.activeTeacher = teacher;
       localStorage.setItem("sep_teacher", JSON.stringify(teacher));
+
+      // Keep the exact profile name/photo in Cloud and embed it in existing exams
+      // so students on another device can see the same teacher information.
+      try {
+        await API.saveTeacherProfileCloud(teacher);
+        await API.syncTeacherProfileToExams(teacher);
+      } catch (err) {
+        console.log("Exam profile sync skipped:", err);
+      }
+
       navigate("teacher-dash");
     }
 
@@ -929,36 +1139,59 @@
       renderTeacherProfile(document.getElementById("app"));
     }
 
-    function deleteTeacherPhoto() {
+    async function deleteTeacherPhoto() {
       tempPhotoBase64 = "";
       const email = state.activeTeacher.email;
-      const savedAuth = JSON.parse(localStorage.getItem("teacher_auth_" + email)) || {};
+      let savedAuth = {};
+      try { savedAuth = JSON.parse(localStorage.getItem("teacher_auth_" + email)) || {}; } catch (e) {}
       savedAuth.photo = "";
       localStorage.setItem("teacher_auth_" + email, JSON.stringify(savedAuth));
       state.activeTeacher.photo = "";
       localStorage.setItem("sep_teacher", JSON.stringify(state.activeTeacher));
-      alert("प्रोफाइल फोटो हटा दी गई!");
+
+      try {
+        await API.syncTeacherProfileToExams(state.activeTeacher);
+      } catch (err) {
+        return alert("फोटो मोबाइल से हट गई, लेकिन परीक्षाओं में Cloud अपडेट नहीं हो सका।\n" + err.message);
+      }
+
+      localStorage.removeItem("sep_cached_exams_" + state.activeTeacher.id);
+      alert("प्रोफाइल फोटो Cloud से भी हटा दी गई!");
       renderTeacherProfile(document.getElementById("app"));
     }
 
-    function saveTeacherProfile() {
+    async function saveTeacherProfile() {
       const newName = document.getElementById("profName").value.trim();
       const newPass = document.getElementById("profPass").value.trim();
 
       if (!newName || !newPass) return alert("कृपया नाम और पासवर्ड दोनों भरें!");
 
       const email = state.activeTeacher.email;
-      const currentAuth = JSON.parse(localStorage.getItem("teacher_auth_" + email)) || {};
+      let currentAuth = {};
+      try {
+        currentAuth = JSON.parse(localStorage.getItem("teacher_auth_" + email)) || {};
+      } catch (e) {}
+
       const finalPhoto = tempPhotoBase64 !== null ? tempPhotoBase64 : (currentAuth.photo || "");
 
-      localStorage.setItem("teacher_auth_" + email, JSON.stringify({ name: newName, password: newPass, photo: finalPhoto }));
+      const updatedAuth = { name: newName, password: newPass, photo: finalPhoto };
+      localStorage.setItem("teacher_auth_" + email, JSON.stringify(updatedAuth));
 
       state.activeTeacher.name = newName;
       state.activeTeacher.photo = finalPhoto;
       localStorage.setItem("sep_teacher", JSON.stringify(state.activeTeacher));
 
+      try {
+        await API.saveTeacherProfileCloud(state.activeTeacher);
+        await API.syncTeacherProfileToExams(state.activeTeacher);
+      } catch (err) {
+        return alert("प्रोफाइल मोबाइल में सेव हो गई, लेकिन परीक्षाओं में Cloud अपडेट नहीं हो सका।\n" + err.message);
+      }
+
       tempPhotoBase64 = null;
-      alert("प्रोफाइल व फोटो सफलतापूर्वक अपडेट हो गई!");
+      localStorage.removeItem("sep_cached_exams_" + state.activeTeacher.id);
+      localStorage.removeItem("sep_cached_results_" + state.activeTeacher.id);
+      alert("प्रोफाइल, फोटो और शिक्षक का नाम Cloud पर सफलतापूर्वक अपडेट हो गया!");
       navigate("teacher-dash");
     }
 
@@ -972,6 +1205,9 @@
             ${state.activeTeacher.photo ? `<img src="${state.activeTeacher.photo}" class="w-7 h-7 rounded-full object-cover border border-white" />` : ''}
             <button onclick="navigate('teacher-dash')" class="text-xs bg-indigo-800 hover:bg-indigo-900 text-white px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 shadow">
               <span>👨‍🏫</span> डैशबोर्ड
+            </button>
+            <button onclick="navigate('student-home')" class="text-xs bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-xl font-bold shadow-sm">
+              Student Portal
             </button>
             <button onclick="handleTeacherLogout()" class="text-xs bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-xl font-bold">Logout</button>
           </div>
@@ -987,7 +1223,9 @@
         `;
       }
 
-      if (state.activeTeacher && (state.view === "student-home" || state.view === "teacher-login")) {
+      // Do not force a logged-in teacher back to the dashboard. This previously
+      // made "विद्यार्थी रूप में लॉगिन करें (Test Mode)" immediately jump back.
+      if (state.activeTeacher && state.view === "teacher-login") {
         state.view = "teacher-dash";
       }
 
@@ -1018,35 +1256,53 @@
     async function renderTeacherDashboard(c) {
       if (!state.activeTeacher) return navigate("teacher-login");
 
-      let cachedExams = JSON.parse(localStorage.getItem("sep_cached_exams_" + state.activeTeacher.id));
-      let cachedResults = JSON.parse(localStorage.getItem("sep_cached_results_" + state.activeTeacher.id));
+      const teacherId = state.activeTeacher.id;
+      let cachedExams = null;
+      let cachedResults = null;
+      try {
+        cachedExams = JSON.parse(localStorage.getItem("sep_cached_exams_" + teacherId));
+        cachedResults = JSON.parse(localStorage.getItem("sep_cached_results_" + teacherId));
+      } catch (e) {}
 
-      if (!cachedExams || !cachedResults) {
-        c.innerHTML = `
-          <div class="bg-white p-12 rounded-3xl border shadow-sm text-center space-y-3">
-            <div class="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-            <p class="text-sm font-bold text-slate-700">डेटा लोड हो रहा है, कृपया प्रतीक्षा करें...</p>
-          </div>
-        `;
-        const [freshExams, freshResults] = await Promise.all([
-          API.getTeacherExams(state.activeTeacher.id),
-          API.getResults(state.activeTeacher.id)
+      c.innerHTML = `
+        <div class="bg-white p-12 rounded-3xl border shadow-sm text-center space-y-3">
+          <div class="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p class="text-sm font-bold text-slate-700">डैशबोर्ड का नवीनतम डेटा लोड हो रहा है...</p>
+          ${cachedExams || cachedResults ? '<p class="text-[11px] text-slate-400">पिछला सुरक्षित डेटा भी उपलब्ध है।</p>' : ''}
+        </div>
+      `;
+
+      let offlineMode = false;
+      try {
+        // Always read Cloud first. The old version could overwrite a good cache
+        // with a temporary empty/failed response and then show zero after refresh.
+        const fresh = await Promise.all([
+          API.getTeacherExams(teacherId),
+          API.getResults(teacherId)
         ]);
-        cachedExams = freshExams;
-        cachedResults = freshResults;
-        localStorage.setItem("sep_cached_exams_" + state.activeTeacher.id, JSON.stringify(freshExams));
-        localStorage.setItem("sep_cached_results_" + state.activeTeacher.id, JSON.stringify(freshResults));
-      } else {
-        API.getTeacherExams(state.activeTeacher.id).then(function(fresh) {
-          localStorage.setItem("sep_cached_exams_" + state.activeTeacher.id, JSON.stringify(fresh));
-        });
-        API.getResults(state.activeTeacher.id).then(function(fresh) {
-          localStorage.setItem("sep_cached_results_" + state.activeTeacher.id, JSON.stringify(fresh));
-        });
+        cachedExams = Array.isArray(fresh[0]) ? fresh[0] : [];
+        cachedResults = Array.isArray(fresh[1]) ? fresh[1] : [];
+        localStorage.setItem("sep_cached_exams_" + teacherId, JSON.stringify(cachedExams));
+        localStorage.setItem("sep_cached_results_" + teacherId, JSON.stringify(cachedResults));
+      } catch (err) {
+        // If Cloud is temporarily unavailable, never replace existing data with [].
+        if (Array.isArray(cachedExams) && Array.isArray(cachedResults)) {
+          offlineMode = true;
+        } else {
+          c.innerHTML = `
+            <div class="bg-white p-8 rounded-3xl border shadow-sm text-center space-y-3">
+              <div class="text-3xl">⚠️</div>
+              <h3 class="font-black text-slate-800">डैशबोर्ड डेटा लोड नहीं हो सका</h3>
+              <p class="text-xs text-slate-500">${err.message || "कनेक्शन त्रुटि"}</p>
+              <button onclick="renderTeacherDashboard(document.getElementById('app'))" class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold">फिर से कोशिश करें</button>
+            </div>
+          `;
+          return;
+        }
       }
 
-      let exams = cachedExams;
-      let results = cachedResults;
+      let exams = Array.isArray(cachedExams) ? cachedExams.slice() : [];
+      let results = Array.isArray(cachedResults) ? cachedResults.slice() : [];
 
       if (state.examSearchQuery && state.examSearchQuery.trim()) {
         const q = state.examSearchQuery.toLowerCase().trim();
@@ -1071,6 +1327,7 @@
 
       c.innerHTML = `
         <div class="space-y-6">
+          ${offlineMode ? `<div class="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2 rounded-xl text-xs font-bold">⚠️ Cloud अभी उपलब्ध नहीं है। पिछला सुरक्षित डेटा दिखाया जा रहा है।</div>` : ''}
           <div class="bg-white rounded-2xl p-5 shadow-sm border flex flex-wrap justify-between items-center gap-4">
             <div class="flex items-center gap-3">
               <img src="${state.activeTeacher.photo || 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png'}" class="w-14 h-14 rounded-full object-cover border-2 border-indigo-600 shadow-md" alt="Teacher" />
@@ -1167,7 +1424,7 @@
     function openStudentLoginSimulation(code, sClass) {
       state.prefillExamCode = code;
       state.prefillClass = sClass;
-      state.prefillStudentName = "Teacher Test (" + state.activeTeacher.name + ")";
+      state.prefillStudentName = state.activeTeacher.name;
       state.prefillPasscode = "TEST12";
       navigate("student-home");
     }
@@ -1182,7 +1439,7 @@
       doc.open();
       doc.write('<!DOCTYPE html><html><head><title>' + ex.examName + ' - Question Paper</title>');
       doc.write('<script src="https://cdn.tailwindcss.com"><\/script>');
-      doc.write('<script>window.MathJax = { loader: { load: ["[tex]/mhchem"] }, tex: { packages: { "[+]": ["mhchem"] }, inlineMath: [["$", "$"]] } };<\/script>');
+      doc.write('<script>window.MathJax = { loader: { load: ["[tex]/mhchem"] }, tex: { packages: { "[+]": ["mhchem"] }, inlineMath: [["$", "$"], ["\\(", "\\)"]], displayMath: [["$$", "$$"], ["\\[", "\\]"]] } };<\/script>');
       doc.write('<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"><\/script>');
       doc.write('</head><body class="p-8">');
       doc.write('<div class="text-center border-b pb-4 mb-6">');
@@ -1257,6 +1514,7 @@
         async () => {
           try {
             await API.moveToTrash(examId);
+            localStorage.removeItem("sep_cached_exams_" + state.activeTeacher.id);
             alert("परीक्षा रीसायकल बिन में भेज दी गई!");
             renderApp();
           } catch (err) { alert(err.message); }
@@ -1267,6 +1525,7 @@
 
     async function restoreExamNow(examId, examName) {
       await API.restoreExam(examId);
+      localStorage.removeItem("sep_cached_exams_" + state.activeTeacher.id);
       alert(`"${examName}" सफलतापूर्वक वापस डैशबोर्ड में आ गई है!`);
       renderApp();
     }
@@ -1278,6 +1537,7 @@
         async () => {
           try {
             await API.permanentDeleteExam(examId);
+            localStorage.removeItem("sep_cached_exams_" + state.activeTeacher.id);
             alert("परीक्षा पूरी तरह डिलीट कर दी गई!");
             renderApp();
           } catch (err) { alert(err.message); }
@@ -1594,6 +1854,7 @@
       try {
         await API.saveExam(ex);
         localStorage.removeItem("sep_cached_exams_" + state.activeTeacher.id);
+        localStorage.removeItem("sep_cached_results_" + state.activeTeacher.id);
         alert("परीक्षा सफलतापूर्वक Cloud पर सेव हो गई!");
         navigate("teacher-dash");
       } catch (err) {
@@ -1846,6 +2107,7 @@
         async () => {
           try {
             await API.deleteSingleResult(resId);
+            localStorage.removeItem("sep_cached_results_" + state.activeTeacher.id);
             alert("रिज़ल्ट सफलतापूर्वक डिलीट कर दिया गया!");
             renderApp();
           } catch (err) { alert(err.message); }
@@ -1861,7 +2123,7 @@
       if (p) {
         navigate("student-home");
       } else if (state.activeTeacher) {
-        if (savedView && savedView.startsWith("teacher-")) {
+        if (savedView && (savedView.startsWith("teacher-") || savedView === "student-home" || savedView === "student-portal-login" || savedView === "student-portal-view")) {
           navigate(savedView);
         } else {
           navigate("teacher-dash");
