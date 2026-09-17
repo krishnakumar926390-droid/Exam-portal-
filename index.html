@@ -32,6 +32,7 @@
   <style>
     .student-exam-math mjx-container { font-size: 1.05em !important; }
     .student-exam-progress { min-width: 250px; }
+    .exam-builder-toolbar { top: var(--sep-header-height, 72px); }
     .result-celebration { position: relative; overflow: hidden; }
     .confetti-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 5; }
     .confetti-piece { position: absolute; top: -18px; width: 8px; height: 14px; opacity: 0; animation: confettiFall 2.4s ease-out forwards; }
@@ -368,6 +369,11 @@
         }
         return activeExams;
       },
+      async getTeacherExamsByName(teacherName) {
+        if (!teacherName) return [];
+        const snap = await db.collection("exams").where("teacherName", "==", teacherName).get();
+        return snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(e => !e.isDeleted);
+      },
       async getTrashExams(teacherId) {
         const snap = await db.collection("exams")
           .where("teacherId", "==", teacherId)
@@ -422,6 +428,11 @@
       },
       async getResults(teacherId) {
         const snap = await db.collection("results").where("teacherId", "==", teacherId).get();
+        return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      },
+      async getResultsByTeacherName(teacherName) {
+        if (!teacherName) return [];
+        const snap = await db.collection("results").where("teacherName", "==", teacherName).get();
         return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       },
       async getResultsByCode(examCode) {
@@ -766,6 +777,8 @@
 
       const resultPayload = {
         teacherId: ex.teacherId,
+        teacherName: ex.teacherName || "",
+        teacherEmail: state.activeTeacher?.email || "",
         teacherPhoto: ex.teacherPhoto || "",
         examId: ex.id,
         examName: ex.examName,
@@ -811,17 +824,23 @@
           <div id="studentResultCard" class="result-celebration bg-white p-6 rounded-3xl border shadow-sm text-center space-y-3">
             <div id="resultConfetti" class="confetti-layer"></div>
             <div class="relative z-10 flex justify-center items-center gap-3">
-              ${res.teacherPhoto ? `<img src="${res.teacherPhoto}" class="w-12 h-12 rounded-full object-cover border-2 border-indigo-500 shadow" alt="Teacher" />` : ''}
               <span class="text-5xl">🎉</span>
               <span class="text-4xl">🎊</span>
             </div>
-            <h2 class="relative z-10 text-xl font-black text-slate-800">परीक्षा परिणाम (Result)</h2>
-            <div class="relative z-10 bg-indigo-50 border border-indigo-100 rounded-2xl p-3 text-left max-w-sm mx-auto">
-              <div class="text-[10px] text-slate-500 font-bold">परीक्षा का नाम</div>
-              <div class="text-base font-black text-indigo-700">${res.examName}</div>
-              <div class="mt-1 text-xs text-slate-600 font-mono">Exam Code: <b>${res.examCode}</b></div>
+            <h2 class="relative z-10 text-2xl md:text-3xl font-black text-slate-800">परीक्षा परिणाम (Result)</h2>
+            <div class="relative z-10 bg-indigo-50 border border-indigo-100 rounded-2xl p-4 text-left max-w-md mx-auto">
+              <div class="text-xs text-slate-500 font-bold">परीक्षा का नाम</div>
+              <div class="text-xl md:text-2xl font-black text-indigo-700">${res.examName}</div>
+              <div class="mt-1 text-sm text-slate-600 font-mono">Exam Code: <b>${res.examCode}</b></div>
             </div>
-            <p class="relative z-10 text-xs text-slate-500">${res.studentName} (${res.studentClass || res.class})</p>
+            <div class="relative z-10 bg-white border-2 border-indigo-100 rounded-2xl p-4 max-w-md mx-auto shadow-sm">
+              <div class="text-xs text-slate-500 font-bold mb-1">विद्यार्थी</div>
+              <div class="text-2xl md:text-3xl font-black text-slate-900">${res.studentName}</div>
+              <div class="mt-2 flex flex-wrap justify-center gap-3 text-sm font-bold text-slate-600">
+                <span>वर्ग: <b class="text-indigo-700">${res.studentClass || res.class}</b></span>
+                <span>रोल नं.: <b class="text-indigo-700">${res.rollNumber || 'N/A'}</b></span>
+              </div>
+            </div>
             
             <div class="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-2xl border text-xs max-w-sm mx-auto my-2">
               <div>
@@ -1327,7 +1346,7 @@
         <div class="bg-white p-12 rounded-3xl border shadow-sm text-center space-y-3">
           <div class="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
           <p class="text-sm font-bold text-slate-700">डैशबोर्ड का नवीनतम डेटा लोड हो रहा है...</p>
-          ${cachedExams || cachedResults ? '<p class="text-[11px] text-slate-400">पिछला सुरक्षित डेटा भी उपलब्ध है।</p>' : ''}
+          ${(cachedExams.length || cachedResults.length) ? '<p class="text-[11px] text-slate-400">पिछला सुरक्षित डेटा भी उपलब्ध है।</p>' : ''}
         </div>
       `;
 
@@ -1337,10 +1356,12 @@
         // with a temporary empty/failed response and then show zero after refresh.
         const fresh = await Promise.all([
           API.getTeacherExams(teacherId),
-          API.getResults(teacherId)
+          API.getResults(teacherId),
+          API.getTeacherExamsByName(state.activeTeacher.name),
+          API.getResultsByTeacherName(state.activeTeacher.name)
         ]);
-        const cloudExams = Array.isArray(fresh[0]) ? fresh[0] : [];
-        const cloudResults = Array.isArray(fresh[1]) ? fresh[1] : [];
+        const cloudExams = [...(Array.isArray(fresh[0]) ? fresh[0] : []), ...(Array.isArray(fresh[2]) ? fresh[2] : [])];
+        const cloudResults = [...(Array.isArray(fresh[1]) ? fresh[1] : []), ...(Array.isArray(fresh[3]) ? fresh[3] : [])];
         // Merge Cloud + local records so a temporary empty/partial Cloud response
         // never makes the teacher dashboard show zero records.
         const examMap = new Map();
@@ -1647,6 +1668,12 @@
       navigate("create-exam");
     }
 
+    function updateExamBuilderStickyTop() {
+      const header = document.querySelector('header');
+      const h = header ? Math.ceil(header.getBoundingClientRect().height) : 72;
+      document.documentElement.style.setProperty('--sep-header-height', h + 'px');
+    }
+
     function syncCurrentQuestions() {
       const ex = state.builderExam;
       if (!ex) return;
@@ -1684,7 +1711,7 @@
 
       c.innerHTML = `
         <div class="space-y-6">
-          <div class="sticky top-16 z-30 bg-white/95 backdrop-blur-md p-4 rounded-2xl border shadow-md flex justify-between items-center gap-3">
+          <div id="examBuilderToolbar" class="sticky exam-builder-toolbar z-30 bg-white/95 backdrop-blur-md p-4 rounded-2xl border shadow-md flex justify-between items-center gap-3">
             <div>
               <h2 class="text-base font-bold text-slate-800">${isEditing ? "✏️ परीक्षा सुधारें" : "🚀 नई परीक्षा बनाएँ"}</h2>
               <span class="text-xs text-slate-500">कुल प्रश्न: <b class="text-indigo-600 font-bold" id="topQCount">${ex.questions.length}</b></span>
@@ -1912,6 +1939,7 @@
       syncCurrentQuestions();
       const ex = state.builderExam;
       ex.teacherName = state.activeTeacher.name;
+      ex.teacherEmail = state.activeTeacher.email || "";
       ex.teacherPhoto = state.activeTeacher.photo || "";
 
       if (!ex.examName.trim()) return alert("Exam Name भरना अनिवार्य है!");
