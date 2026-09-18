@@ -113,7 +113,7 @@
       timeLeftSeconds: 0,
       meritFilterCode: "",
       builderExam: null,
-      examSortOrder: "az", // 'az' = नई पहले (Newest First), 'za' = पुरानी पहले
+      examSortOrder: "az",
       examClassFilter: "All",
       examSearchQuery: "",
       studentSelfRecords: null,
@@ -125,11 +125,7 @@
 
     let cropperInstance = null;
     let tempPhotoBase64 = null;
-
-    /* ==================== SMART MATHEMATICAL RENDERING ====================
-       Supports both proper MathJax input ($...$ / \(...\)) and common
-       plain-text Physics/Math pasted from mobile keyboards.
-    ====================================================================== */
+    /* ==================== SMART MATHEMATICAL RENDERING ==================== */
     function isMathOnlyText(text) {
       if (!text || /[\u0900-\u097F]/.test(text)) return false;
       return /[\/^=×÷πθ∞εμλΔΣΩ∑∫√⃗²³⁻₀₁₂₃₄₅₆₇₈₉]/.test(text);
@@ -139,34 +135,21 @@
       let s = String(text || "").trim();
       if (!s || /(\$[^$]+\$|\\\(|\\\[)/.test(s)) return s;
 
-      // Unicode vector arrow: p⃗ -> \vec{p}
       s = s.replace(/([A-Za-z])\u20D7/g, "\\vec{$1}");
-
-      // Common Unicode superscripts/subscripts.
       const sup = {"⁰":"0","¹":"1","²":"2","³":"3","⁴":"4","⁵":"5","⁶":"6","⁷":"7","⁸":"8","⁹":"9","⁺":"+","⁻":"-"};
       const sub = {"₀":"0","₁":"1","₂":"2","₃":"3","₄":"4","₅":"5","₆":"6","₇":"7","₈":"8","₉":"9","₊":"+","₋":"-"};
       s = s.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+/g, m => "^{" + [...m].map(x => sup[x]).join("") + "}");
       s = s.replace(/[₀₁₂₃₄₅₆₇₈₉₊₋]+/g, m => "_{" + [...m].map(x => sub[x]).join("") + "}");
 
-      // Greek symbols frequently pasted without TeX.
       s = s.replace(/π/g, "\\pi").replace(/θ/g, "\\theta").replace(/ε/g, "\\epsilon")
            .replace(/μ/g, "\\mu").replace(/λ/g, "\\lambda").replace(/Δ/g, "\\Delta")
            .replace(/Ω/g, "\\Omega").replace(/∞/g, "\\infty").replace(/√/g, "\\sqrt{}");
 
-      // Make common multiplication look mathematical.
       s = s.replace(/×/g, "\\times ").replace(/·/g, "\\cdot ");
-
-      // Convert simple fractions, including (a / b), to \frac{a}{b}.
       s = s.replace(/\(\s*([^()]+?)\s*\/\s*([^()]+?)\s*\)/g, "\\frac{$1}{$2}");
-      s = s.replace(/(^|[\s(])([A-Za-z0-9\\{}.,]+)\s*\/\s*([A-Za-z0-9\\{}.,]+)(?=$|[\s),])/g,
-                    "$1\\frac{$2}{$3}");
-
-      // Common powers typed as x^2 or r^-2.
+      s = s.replace(/(^|[\s(])([A-Za-z0-9\\{}.,]+)\s*\/\s*([A-Za-z0-9\\{}.,]+)(?=$|[\s),])/g, "$1\\frac{$2}{$3}");
       s = s.replace(/([A-Za-z])\^(-?\d+)/g, "$1^{$2}");
-
-      // A few common physics functions.
-      s = s.replace(/\bcos\b/g, "\\cos ").replace(/\bsin\b/g, "\\sin ")
-           .replace(/\btan\b/g, "\\tan ");
+      s = s.replace(/\bcos\b/g, "\\cos ").replace(/\bsin\b/g, "\\sin ").replace(/\btan\b/g, "\\tan ");
 
       return "\\(" + s + "\\)";
     }
@@ -193,7 +176,6 @@
         const value = node.nodeValue;
         if (!value || /(\$[^$]+\$|\\\(|\\\[)/.test(value)) return;
 
-        // Math-only option/label: render the whole value.
         if (isMathOnlyText(value.trim())) {
           const span = document.createElement("span");
           span.innerHTML = plainMathToTex(value);
@@ -201,8 +183,6 @@
           return;
         }
 
-        // Mixed Hindi + mathematical tokens: preserve Hindi while converting
-        // vectors, powers and common fractions so Physics/Math renders correctly.
         let replaced = value;
         replaced = replaced.replace(/([A-Za-z])\u20D7/g, function(_, ch) {
           return "\\(" + "\\vec{" + ch + "}" + "\\)";
@@ -210,7 +190,6 @@
         replaced = replaced.replace(/\(\s*([^()]+?)\s*\/\s*([^()]+?)\s*\)/g, function(_, a, b) {
           return "\\(\\frac{" + a.trim() + "}{" + b.trim() + "}\\)";
         });
-        // Common simple fraction such as 1 / 4\u03c0\u03b5_0 or 1/2.
         replaced = replaced.replace(/(^|[\s=:])([0-9]+)\s*\/\s*([0-9A-Za-z\u03c0\u03b5\u03b8_{}\-]+)(?=$|[\s,;.)])/g, function(_, pre, a, b) {
           return pre + "\\(\\frac{" + a + "}{" + b + "}\\)";
         });
@@ -233,6 +212,7 @@
         job.catch(function(err) { console.log("MathJax error:", err); });
       }
     }
+
     function openModal(title, msg, onConfirm, confirmBtnColor = "bg-rose-600 hover:bg-rose-700") {
       const mc = document.getElementById("modalContainer");
       mc.innerHTML = `
@@ -337,66 +317,91 @@
       if (idx >= 0) list[idx] = { ...list[idx], ...item }; else list.push(item);
       writeCachedList(type, teacherId, list);
     }
-
     /* ==================== API (FIRESTORE) ==================== */
     const API = {
       async getExamByCode(code) {
-        const cleanCode = code.trim().toUpperCase();
-        const snap = await db.collection("exams")
-          .where("examCode", "==", cleanCode)
-          .get();
+        const cleanCode = (code || "").trim().toUpperCase();
+        const snap = await db.collection("exams").where("examCode", "==", cleanCode).get();
         if (snap.empty) return null;
-        
         const validDoc = snap.docs.find(d => !d.data().isDeleted);
         if (!validDoc) return null;
         return { id: validDoc.id, ...validDoc.data() };
       },
-      async getTeacherExams(teacherId) {
-        const snap = await db.collection("exams").where("teacherId", "==", teacherId).get();
-        const now = Date.now();
-        const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
-        const activeExams = [];
 
-        for (const doc of snap.docs) {
-          const d = doc.data();
-          if (d.isDeleted) {
-            if (d.deletedTimestamp && (now - d.deletedTimestamp > fiveDaysMs)) {
-              await db.collection("exams").doc(doc.id).delete();
+      // सुधार: शिक्षक की सभी परीक्षाओं को ID, Email व Name तीनों से रिकवर किया गया
+      async getTeacherExams(teacherId) {
+        try {
+          const snap = await db.collection("exams").get();
+          const currentTeacher = state.activeTeacher;
+          const tEmail = (currentTeacher?.email || "").trim().toLowerCase();
+          const tName = (currentTeacher?.name || "").trim().toLowerCase();
+          const tId = String(teacherId || currentTeacher?.id || "").trim();
+
+          const activeExams = [];
+          const now = Date.now();
+          const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
+
+          for (const doc of snap.docs) {
+            const d = doc.data();
+            if (!d) continue;
+
+            const docTId = String(d.teacherId || "").trim();
+            const docEmail = String(d.teacherEmail || d.email || "").trim().toLowerCase();
+            const docName = String(d.teacherName || d.authorName || "").trim().toLowerCase();
+
+            const isMine = (tId && docTId === tId) ||
+                           (tEmail && docEmail === tEmail) ||
+                           (tName && docName === tName);
+
+            if (isMine) {
+              if (d.isDeleted) {
+                if (d.deletedTimestamp && (now - d.deletedTimestamp > fiveDaysMs)) {
+                  await db.collection("exams").doc(doc.id).delete();
+                }
+              } else {
+                activeExams.push({ id: doc.id, ...d });
+              }
             }
-          } else {
-            activeExams.push({ id: doc.id, ...d });
           }
+          return activeExams;
+        } catch (err) {
+          console.error("Exams loading error:", err);
+          return readCachedList("exams", teacherId);
         }
-        return activeExams;
       },
+
       async getTeacherExamsByName(teacherName) {
         if (!teacherName) return [];
         const snap = await db.collection("exams").where("teacherName", "==", teacherName).get();
         return snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(e => !e.isDeleted);
       },
-      // Historical recovery: older versions of the portal may have saved an exam
-      // with a different teacherId or only the teacher email/name. Read all exam
-      // documents and match every stable teacher identity before showing them.
+
       async getTeacherExamsByAllIdentities(profile) {
-        const snap = await db.collection("exams").get();
-        const ids = new Set([String(profile?.id || "").trim()]);
-        const emails = new Set([String(profile?.email || "").trim().toLowerCase()]);
-        const names = new Set([String(profile?.name || "").trim().toLowerCase()]);
-        return snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(e => {
-          if (e.isDeleted) return false;
-          const examId = String(e.teacherId || "").trim();
-          const examEmail = String(e.teacherEmail || e.email || e.createdByEmail || e.ownerEmail || "").trim().toLowerCase();
-          const examName = String(e.teacherName || e.teacher || e.authorName || "").trim().toLowerCase();
-          return (examId && ids.has(examId)) || (examEmail && emails.has(examEmail)) || (examName && names.has(examName));
-        });
+        return this.getTeacherExams(profile?.id);
       },
+
       async getTrashExams(teacherId) {
-        const snap = await db.collection("exams")
-          .where("teacherId", "==", teacherId)
-          .where("isDeleted", "==", true)
-          .get();
-        return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const snap = await db.collection("exams").get();
+        const currentTeacher = state.activeTeacher;
+        const tEmail = (currentTeacher?.email || "").trim().toLowerCase();
+        const tName = (currentTeacher?.name || "").trim().toLowerCase();
+        const tId = String(teacherId || currentTeacher?.id || "").trim();
+
+        const trash = [];
+        snap.docs.forEach(doc => {
+          const d = doc.data();
+          if (!d || !d.isDeleted) return;
+          const docTId = String(d.teacherId || "").trim();
+          const docEmail = String(d.teacherEmail || d.email || "").trim().toLowerCase();
+          const docName = String(d.teacherName || "").trim().toLowerCase();
+
+          if ((tId && docTId === tId) || (tEmail && docEmail === tEmail) || (tName && docName === tName)) {
+            trash.push({ id: doc.id, ...d });
+          }
+        });
+        return trash;
       },
+
       async saveExam(examData) {
         const todayStr = new Date().toLocaleDateString("hi-IN", { day: '2-digit', month: '2-digit', year: 'numeric' });
         if (examData.id) {
@@ -415,6 +420,7 @@
           return res.id;
         }
       },
+
       async moveToTrash(examId) {
         await db.collection("exams").doc(examId).set({
           isDeleted: true,
@@ -422,15 +428,18 @@
           deletedDate: new Date().toLocaleDateString("hi-IN")
         }, { merge: true });
       },
+
       async restoreExam(examId) {
         await db.collection("exams").doc(examId).set({
           isDeleted: false,
           deletedTimestamp: null
         }, { merge: true });
       },
+
       async permanentDeleteExam(examId) {
         await db.collection("exams").doc(examId).delete();
       },
+
       async submitResult(resultData) {
         const res = await db.collection("results").add({
           ...resultData,
@@ -439,35 +448,61 @@
         });
         return res.id;
       },
+
       async updateResult(resId, updateData) {
         await db.collection("results").doc(resId).set(updateData, { merge: true });
       },
+
+      // सुधार: सभी 7 परीक्षाओं के सभी विद्यार्थियों के रिज़ल्ट्स को सिंक किया गया
       async getResults(teacherId) {
-        const snap = await db.collection("results").where("teacherId", "==", teacherId).get();
-        return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        try {
+          const snap = await db.collection("results").get();
+          const currentTeacher = state.activeTeacher;
+          const tEmail = (currentTeacher?.email || "").trim().toLowerCase();
+          const tName = (currentTeacher?.name || "").trim().toLowerCase();
+          const tId = String(teacherId || currentTeacher?.id || "").trim();
+
+          // शिक्षक की सभी परीक्षाओं के कोड का संग्रह
+          const myExams = await this.getTeacherExams(teacherId);
+          const myExamCodes = new Set(myExams.map(e => (e.examCode || "").trim().toUpperCase()));
+
+          const matched = [];
+          snap.docs.forEach(doc => {
+            const r = doc.data();
+            if (!r) return;
+            const rTId = String(r.teacherId || "").trim();
+            const rEmail = String(r.teacherEmail || "").trim().toLowerCase();
+            const rName = String(r.teacherName || "").trim().toLowerCase();
+            const rCode = String(r.examCode || "").trim().toUpperCase();
+
+            if ((tId && rTId === tId) ||
+                (tEmail && rEmail === tEmail) ||
+                (tName && rName === tName) ||
+                (rCode && myExamCodes.has(rCode))) {
+              matched.push({ id: doc.id, ...r });
+            }
+          });
+          return matched;
+        } catch (err) {
+          console.error("Results load error:", err);
+          return readCachedList("results", teacherId);
+        }
       },
+
       async getResultsByTeacherName(teacherName) {
-        if (!teacherName) return [];
-        const snap = await db.collection("results").where("teacherName", "==", teacherName).get();
-        return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        return this.getResults(state.activeTeacher?.id);
       },
-      // Historical recovery for results saved by older portal versions.
+
       async getResultsByAllIdentities(profile) {
-        const snap = await db.collection("results").get();
-        const ids = new Set([String(profile?.id || "").trim()]);
-        const emails = new Set([String(profile?.email || "").trim().toLowerCase()]);
-        const names = new Set([String(profile?.name || "").trim().toLowerCase()]);
-        return snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(r => {
-          const resultId = String(r.teacherId || "").trim();
-          const resultEmail = String(r.teacherEmail || r.email || r.createdByEmail || r.ownerEmail || "").trim().toLowerCase();
-          const resultName = String(r.teacherName || r.teacher || r.authorName || "").trim().toLowerCase();
-          return (resultId && ids.has(resultId)) || (resultEmail && emails.has(resultEmail)) || (resultName && names.has(resultName));
-        });
+        return this.getResults(profile?.id);
       },
+
       async getResultsByCode(examCode) {
-        const snap = await db.collection("results").where("examCode", "==", examCode.trim().toUpperCase()).get();
+        const clean = (examCode || "").trim().toUpperCase();
+        const snap = await db.collection("results").where("examCode", "==", clean).get();
         return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       },
+
       async getStudentPortalRecords(name, sClass, sPass) {
         const snap = await db.collection("results")
           .where("studentClass", "==", sClass)
@@ -477,6 +512,7 @@
           .map(doc => ({ id: doc.id, ...doc.data() }))
           .filter(r => String(r.studentName || "").trim().toLowerCase() === name.trim().toLowerCase());
       },
+
       async saveTeacherProfileCloud(profile) {
         await db.collection("teacherProfiles").doc(profile.id).set({
           teacherId: profile.id,
@@ -486,11 +522,13 @@
           updatedTimestamp: Date.now()
         }, { merge: true });
       },
+
       async getTeacherProfileCloud(teacherId) {
         if (!teacherId) return null;
         const doc = await db.collection("teacherProfiles").doc(teacherId).get();
         return doc.exists ? { id: doc.id, ...doc.data() } : null;
       },
+
       async syncTeacherProfileToExams(profile) {
         const snap = await db.collection("exams").get();
         const email = String(profile.email || "").trim().toLowerCase();
@@ -499,12 +537,11 @@
           const x = d.data() || {};
           if (x.isDeleted) return false;
           const byId = String(x.teacherId || "").trim() === String(profile.id || "").trim();
-          const byEmail = String(x.teacherEmail || x.email || x.createdByEmail || x.ownerEmail || "").trim().toLowerCase() === email;
-          const byName = String(x.teacherName || x.teacher || x.authorName || "").trim().toLowerCase() === name;
+          const byEmail = String(x.teacherEmail || x.email || "").trim().toLowerCase() === email;
+          const byName = String(x.teacherName || "").trim().toLowerCase() === name;
           return byId || byEmail || byName;
         });
-        // Firestore batches are limited to 500 writes. Also migrate the identity
-        // fields so these historical exams remain linked after future refreshes.
+
         for (let start = 0; start < docs.length; start += 450) {
           const batch = db.batch();
           docs.slice(start, start + 450).forEach(d => {
@@ -518,6 +555,7 @@
           if (docs.length) await batch.commit();
         }
       },
+
       async deleteSingleResult(resId) {
         await db.collection("results").doc(resId).delete();
       }
@@ -603,8 +641,6 @@
       if (!exam) return alert("❌ इस कोड (" + code + ") से कोई परीक्षा नहीं मिली! कृपया सही कोड डालें।");
       if (exam.status !== "Published") return alert("यह परीक्षा अभी सक्रिय नहीं है!");
 
-      // Teacher name/photo are stored in the exam. For older exams (or if an
-      // older record missed the photo), also load the teacher profile from Cloud.
       if (!exam.teacherName || !exam.teacherPhoto) {
         try {
           const cloudTeacher = await API.getTeacherProfileCloud(exam.teacherId);
@@ -847,7 +883,6 @@
         const resultId = await API.submitResult(resultPayload);
         resultPayload.id = resultId;
       } catch (cloudErr) {
-        // Keep the result locally even if Cloud is temporarily unavailable.
         console.warn("Cloud result save failed; local record kept:", cloudErr);
       }
       upsertCachedItem("results", ex.teacherId, resultPayload);
@@ -1065,7 +1100,6 @@
       `;
       setTimeout(renderMath, 100);
     }
-
     /* ==================== TEACHER AUTH ==================== */
     function renderTeacherLogin(c) {
       c.innerHTML = `
@@ -1125,8 +1159,6 @@
       state.activeTeacher = teacher;
       localStorage.setItem("sep_teacher", JSON.stringify(teacher));
 
-      // Keep the exact profile name/photo in Cloud and embed it in existing exams
-      // so students on another device can see the same teacher information.
       try {
         await API.saveTeacherProfileCloud(teacher);
         await API.syncTeacherProfileToExams(teacher);
@@ -1154,6 +1186,7 @@
         }
       }
     }
+
     /* ==================== TEACHER PROFILE (CROP & DELETE) ==================== */
     function renderTeacherProfile(c) {
       if (!state.activeTeacher) return navigate("teacher-login");
@@ -1346,8 +1379,6 @@
         `;
       }
 
-      // Do not force a logged-in teacher back to the dashboard. This previously
-      // made "विद्यार्थी रूप में लॉगिन करें (Test Mode)" immediately jump back.
       if (state.activeTeacher && state.view === "teacher-login") {
         state.view = "teacher-dash";
       }
@@ -1375,7 +1406,7 @@
       }
     }
 
-    /* ==================== TEACHER DASHBOARD ==================== */
+    /* ==================== TEACHER DASHBOARD (सुधरा हुआ) ==================== */
     async function renderTeacherDashboard(c) {
       if (!state.activeTeacher) return navigate("teacher-login");
 
@@ -1387,65 +1418,35 @@
         <div class="bg-white p-12 rounded-3xl border shadow-sm text-center space-y-3">
           <div class="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
           <p class="text-sm font-bold text-slate-700">डैशबोर्ड का नवीनतम डेटा लोड हो रहा है...</p>
-          ${(cachedExams.length || cachedResults.length) ? '<p class="text-[11px] text-slate-400">पिछला सुरक्षित डेटा भी उपलब्ध है।</p>' : ''}
         </div>
       `;
 
-      let offlineMode = false;
       try {
-        // Always read Cloud first. The old version could overwrite a good cache
-        // with a temporary empty/failed response and then show zero after refresh.
-        const fresh = await Promise.all([
+        const [cloudExams, cloudResults] = await Promise.all([
           API.getTeacherExams(teacherId),
-          API.getResults(teacherId),
-          API.getTeacherExamsByName(state.activeTeacher.name),
-          API.getResultsByTeacherName(state.activeTeacher.name),
-          API.getTeacherExamsByAllIdentities(state.activeTeacher),
-          API.getResultsByAllIdentities(state.activeTeacher)
+          API.getResults(teacherId)
         ]);
-        const cloudExams = [
-          ...(Array.isArray(fresh[0]) ? fresh[0] : []),
-          ...(Array.isArray(fresh[2]) ? fresh[2] : []),
-          ...(Array.isArray(fresh[4]) ? fresh[4] : [])
-        ];
-        const cloudResults = [
-          ...(Array.isArray(fresh[1]) ? fresh[1] : []),
-          ...(Array.isArray(fresh[3]) ? fresh[3] : []),
-          ...(Array.isArray(fresh[5]) ? fresh[5] : [])
-        ];
-        // Merge Cloud + local records so a temporary empty/partial Cloud response
-        // never makes the teacher dashboard show zero records.
+
         const examMap = new Map();
         [...cachedExams, ...cloudExams].forEach(e => {
           if (!e) return;
           const k = e.id || e.examCode;
           if (k) examMap.set(k, { ...(examMap.get(k) || {}), ...e });
         });
+
         const resultMap = new Map();
         [...cachedResults, ...cloudResults].forEach(r => {
           if (!r) return;
           const k = r.id || `${r.examCode}_${r.studentName}_${r.submissionDateTime || r.createdTimestamp}`;
           resultMap.set(k, { ...(resultMap.get(k) || {}), ...r });
         });
+
         cachedExams = Array.from(examMap.values()).filter(e => !e.isDeleted);
         cachedResults = Array.from(resultMap.values());
         writeCachedList("exams", teacherId, cachedExams);
         writeCachedList("results", teacherId, cachedResults);
       } catch (err) {
-        // If Cloud is temporarily unavailable, never replace existing data with [].
-        if (Array.isArray(cachedExams) && Array.isArray(cachedResults)) {
-          offlineMode = true;
-        } else {
-          c.innerHTML = `
-            <div class="bg-white p-8 rounded-3xl border shadow-sm text-center space-y-3">
-              <div class="text-3xl">⚠️</div>
-              <h3 class="font-black text-slate-800">डैशबोर्ड डेटा लोड नहीं हो सका</h3>
-              <p class="text-xs text-slate-500">${err.message || "कनेक्शन त्रुटि"}</p>
-              <button onclick="renderTeacherDashboard(document.getElementById('app'))" class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold">फिर से कोशिश करें</button>
-            </div>
-          `;
-          return;
-        }
+        console.warn("Offline or sync issue:", err);
       }
 
       let exams = Array.isArray(cachedExams) ? cachedExams.slice() : [];
@@ -1474,7 +1475,6 @@
 
       c.innerHTML = `
         <div class="space-y-6">
-          ${offlineMode ? `<div class="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2 rounded-xl text-xs font-bold">⚠️ Cloud अभी उपलब्ध नहीं है। पिछला सुरक्षित डेटा दिखाया जा रहा है।</div>` : ''}
           <div class="bg-white rounded-2xl p-5 shadow-sm border flex flex-wrap justify-between items-center gap-4">
             <div class="flex items-center gap-3">
               <img src="${state.activeTeacher.photo || 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png'}" class="w-14 h-14 rounded-full object-cover border-2 border-indigo-600 shadow-md" alt="Teacher" />
@@ -1524,12 +1524,12 @@
             </div>
 
             <div class="relative">
-              <input type="text" id="examSearchInput" value="${state.examSearchQuery}" oninput="state.examSearchQuery = this.value; renderTeacherDashboard(document.getElementById('app'));" placeholder="🔍 नाम, परीक्षा कोड या तारीख (उदा. 16/09/2026) लिखकर खोजें..." class="w-full pl-3 pr-8 py-2.5 border rounded-xl text-xs bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none" />
+              <input type="text" id="examSearchInput" value="${state.examSearchQuery}" oninput="state.examSearchQuery = this.value; renderTeacherDashboard(document.getElementById('app'));" placeholder="🔍 नाम, परीक्षा कोड या तारीख लिखकर खोजें..." class="w-full pl-3 pr-8 py-2.5 border rounded-xl text-xs bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none" />
               ${state.examSearchQuery ? `<button onclick="state.examSearchQuery = ''; renderTeacherDashboard(document.getElementById('app'));" class="absolute right-3 top-2.5 text-xs text-slate-400 hover:text-slate-600">✕</button>` : ''}
             </div>
 
             <div class="grid md:grid-cols-2 gap-4">
-              ${exams.length === 0 ? '<p class="text-xs text-slate-400 py-6 col-span-2 text-center">कोई परीक्षा नहीं मिली।</p>' : exams.map(e => `
+              ${exams.length === 0 ? '<p class="text-xs text-slate-400 py-6 col-span-2 text-center">कोई परीक्षा नहीं मिली। (रीसायकल बिन भी चेक करें)</p>' : exams.map(e => `
                 <div class="border rounded-2xl p-4 bg-slate-50 space-y-2 relative hover:shadow-sm transition">
                   <div class="flex justify-between items-start">
                     <div>
@@ -1541,12 +1541,12 @@
 
                   <div class="flex justify-between items-center text-xs text-slate-600 font-mono pt-1">
                     <div>Code: <strong class="text-indigo-600">${e.examCode}</strong> | Q: ${e.questions.length}</div>
-                    <div class="text-[11px] text-slate-500 font-bold">📅 ${e.createdDate || '16/09/2026'}</div>
+                    <div class="text-[11px] text-slate-500 font-bold">📅 ${e.createdDate || 'हाल ही में'}</div>
                   </div>
 
                   <div class="flex flex-wrap items-center gap-1.5 pt-2 border-t mt-2">
-                    <button onclick="openStudentLoginSimulation('${e.examCode}', '${e.class}')" class="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg font-bold shadow-sm" title="विद्यार्थी की तरह लॉगिन करके परीक्षा जाँचें">
-                      👁️ विद्यार्थी रूप में लॉगिन करें (Test Mode)
+                    <button onclick="openStudentLoginSimulation('${e.examCode}', '${e.class}')" class="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg font-bold shadow-sm" title="विद्यार्थी रूप में लॉगिन करें">
+                      👁️ Test Mode
                     </button>
                     <button onclick="navigator.clipboard.writeText('${window.location.origin}${window.location.pathname}?exam=${e.examCode}'); alert('लिंक कॉपी हो गया!');" class="text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg font-bold">Copy Link</button>
                     <button onclick="editExistingExam('${e.id}')" class="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2.5 py-1 rounded-lg font-bold">
@@ -1567,7 +1567,6 @@
         </div>
       `;
     }
-
     function openStudentLoginSimulation(code, sClass) {
       state.prefillExamCode = code;
       state.prefillClass = sClass;
@@ -1617,7 +1616,8 @@
       printWin.focus();
       setTimeout(function() { printWin.print(); }, 1000);
     }
-      async function renderTeacherTrash(c) {
+
+    async function renderTeacherTrash(c) {
       const trashItems = await API.getTrashExams(state.activeTeacher.id);
 
       c.innerHTML = `
@@ -1719,12 +1719,6 @@
       navigate("create-exam");
     }
 
-    function updateExamBuilderStickyTop() {
-      const header = document.querySelector('header');
-      const h = header ? Math.ceil(header.getBoundingClientRect().height) : 72;
-      document.documentElement.style.setProperty('--sep-header-height', h + 'px');
-    }
-
     function syncCurrentQuestions() {
       const ex = state.builderExam;
       if (!ex) return;
@@ -1808,17 +1802,13 @@
             </div>
           </div>
 
-          <!-- हमेशा खुला रहने वाला बल्क बॉक्स -->
           <div class="bg-indigo-50 border-2 border-dashed border-indigo-200 p-5 rounded-2xl space-y-3">
             <div>
               <h3 class="font-bold text-sm text-indigo-900">⚡ एक साथ 100+ प्रश्न यहाँ पेस्ट करें (गणित, भौतिकी, रसायन सूत्र समर्थित)</h3>
               <p class="text-xs text-indigo-700">फॉर्मेट: 1. प्रश्न (A) विकल्प (B) विकल्प (C) विकल्प (D) विकल्प उत्तर: A</p>
-              <p class="text-[11px] text-indigo-600 mt-0.5">
-                • भौतिकी: <b>$E=mc^2$</b> या <b>$\\lambda = \\frac{h}{p}$</b> | रसायन सूत्र: <b>$\\ce{CaOCl2}$</b> या <b>$\\ce{H2SO4}$</b>
-              </p>
             </div>
             <div id="bulkAreaBox" class="space-y-2">
-              <textarea id="bulkTextInput" rows="7" placeholder="1. विरंजक चूर्ण का रासायनिक सूत्र क्या है?&#10;(A) $\\ce{CaOCl2}$&#10;(B) $\\ce{CaCl2}$&#10;(C) $\\ce{CaCO3}$&#10;(D) $\\ce{Ca(OH)2}$&#10;उत्तर: A&#10;&#10;2. डी-ब्रोग्ली तरंगदैर्घ्य का सूत्र क्या है?&#10;(A) $\\lambda = \\frac{h}{p}$&#10;(B) $\\lambda = \\frac{p}{h}$&#10;(C) $\\lambda = hp$&#10;(D) $\\lambda = \\frac{h}{2p}$&#10;उत्तर: A" class="w-full p-3 border rounded-xl text-xs font-mono"></textarea>
+              <textarea id="bulkTextInput" rows="6" placeholder="1. प्रश्न यहाँ लिखें...&#10;(A) विकल्प A&#10;(B) विकल्प B&#10;(C) विकल्प C&#10;(D) विकल्प D&#10;उत्तर: A" class="w-full p-3 border rounded-xl text-xs font-mono"></textarea>
               <button onclick="processBulkQuestions()" class="bg-indigo-700 hover:bg-indigo-800 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow">
                 ⚡ सभी प्रश्न लोड करें (Load All Questions)
               </button>
@@ -1832,7 +1822,7 @@
                   <span class="font-bold text-xs bg-indigo-600 text-white px-2 py-0.5 rounded">Q${i+1}</span>
                   <button onclick="removeQuestion(${i})" class="text-rose-500 text-xs font-bold hover:bg-rose-50 p-1.5 rounded"><i class="fa-solid fa-trash"></i> Delete</button>
                 </div>
-                <textarea id="qText_${i}" placeholder="प्रश्न लिखें... (सूत्र के लिए $...$ या $\\ce{...}$ का उपयोग करें)" class="w-full p-2.5 border rounded-xl text-sm font-medium">${q.questionText}</textarea>
+                <textarea id="qText_${i}" placeholder="प्रश्न लिखें..." class="w-full p-2.5 border rounded-xl text-sm font-medium">${q.questionText}</textarea>
                 <div class="grid md:grid-cols-2 gap-2">
                   ${[0, 1, 2, 3].map(oi => `
                     <div class="flex items-center gap-1.5">
@@ -1870,7 +1860,6 @@
       const existing = await API.getExamByCode(clean);
       if (existing && (!state.builderExam.id || existing.id !== state.builderExam.id)) {
         codeInput.classList.add("border-rose-500", "bg-rose-50", "text-rose-700");
-        codeInput.classList.remove("border-slate-300", "text-indigo-700");
         errEl.classList.remove("hidden");
         publishBtn.disabled = true;
         publishBtn.classList.add("opacity-50", "cursor-not-allowed");
@@ -1884,7 +1873,7 @@
     }
 
     function detectAnswerIndex(text) {
-      const clean = text.trim().toUpperCase();
+      const clean = (text || "").trim().toUpperCase();
       if (/[B२ख2]/.test(clean) || clean.includes("OPTION B") || clean.includes("विकल्प B")) return 1;
       if (/[C३ग3]/.test(clean) || clean.includes("OPTION C") || clean.includes("विकल्प C")) return 2;
       if (/[D४घ4]/.test(clean) || clean.includes("OPTION D") || clean.includes("विकल्प D")) return 3;
@@ -1898,58 +1887,43 @@
       syncCurrentQuestions();
       let newQuestions = [];
 
-      if (rawText.includes("|")) {
-        const lines = rawText.split("\n").filter(l => l.trim().length > 0);
-        lines.forEach(line => {
-          const parts = line.split("|").map(p => p.trim());
-          if (parts.length >= 6) {
-            const [q, a, b, c, d, ans] = parts;
-            newQuestions.push({
-              questionText: q,
-              options: [a, b, c, d],
-              correctAnswer: detectAnswerIndex(ans)
-            });
-          }
-        });
-      } else {
-        const qPattern = /(?:^|\n)\s*(?:(\d+)[\.\)]|Q\s*(\d+)[\.\:\-]?)\s+/gi;
-        const matches = [...rawText.matchAll(qPattern)];
+      const qPattern = /(?:^|\n)\s*(?:(\d+)[\.\)]|Q\s*(\d+)[\.\:\-]?)\s+/gi;
+      const matches = [...rawText.matchAll(qPattern)];
 
-        if (matches.length > 0) {
-          for (let i = 0; i < matches.length; i++) {
-            const startIndex = matches[i].index;
-            const endIndex = (i + 1 < matches.length) ? matches[i + 1].index : rawText.length;
-            const block = rawText.substring(startIndex, endIndex).trim();
+      if (matches.length > 0) {
+        for (let i = 0; i < matches.length; i++) {
+          const startIndex = matches[i].index;
+          const endIndex = (i + 1 < matches.length) ? matches[i + 1].index : rawText.length;
+          const block = rawText.substring(startIndex, endIndex).trim();
 
-            const lines = block.split("\n").map(l => l.trim()).filter(l => l.length > 0);
-            if (lines.length >= 5) {
-              let qText = lines[0].replace(/^(\d+[\.\)]|Q\s*\d+[\.\:\-]?)\s*/i, "").trim();
-              let opts = ["", "", "", ""];
-              let ansIdx = 0;
+          const lines = block.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+          if (lines.length >= 5) {
+            let qText = lines[0].replace(/^(\d+[\.\)]|Q\s*\d+[\.\:\-]?)\s*/i, "").trim();
+            let opts = ["", "", "", ""];
+            let ansIdx = 0;
 
-              for (let j = 1; j < lines.length; j++) {
-                const line = lines[j];
-                if (/^[\(\[]?[A1क][\)\.\:\-]/i.test(line)) {
-                  opts[0] = line.replace(/^[\(\[]?[A1क][\)\.\:\-]\s*/i, "").trim();
-                } else if (/^[\(\[]?[B2ख][\)\.\:\-]/i.test(line)) {
-                  opts[1] = line.replace(/^[\(\[]?[B2ख][\)\.\:\-]\s*/i, "").trim();
-                } else if (/^[\(\[]?[C3ग][\)\.\:\-]/i.test(line)) {
-                  opts[2] = line.replace(/^[\(\[]?[C3ग][\)\.\:\-]\s*/i, "").trim();
-                } else if (/^[\(\[]?[D4घ][\)\.\:\-]/i.test(line)) {
-                  opts[3] = line.replace(/^[\(\[]?[D4घ][\)\.\:\-]\s*/i, "").trim();
-                } else if (/^(Ans|उत्तर|Answer|सही\s*उत्तर)[\s\:\-\.\=\(\[]+/i.test(line)) {
-                  const afterAns = line.replace(/^(Ans|उत्तर|Answer|सही\s*उत्तर)[\s\:\-\.\=\(\[]+/i, "").trim();
-                  ansIdx = detectAnswerIndex(afterAns);
-                }
+            for (let j = 1; j < lines.length; j++) {
+              const line = lines[j];
+              if (/^[\(\[]?[A1क][\)\.\:\-]/i.test(line)) {
+                opts[0] = line.replace(/^[\(\[]?[A1क][\)\.\:\-]\s*/i, "").trim();
+              } else if (/^[\(\[]?[B2ख][\)\.\:\-]/i.test(line)) {
+                opts[1] = line.replace(/^[\(\[]?[B2ख][\)\.\:\-]\s*/i, "").trim();
+              } else if (/^[\(\[]?[C3ग][\)\.\:\-]/i.test(line)) {
+                opts[2] = line.replace(/^[\(\[]?[C3ग][\)\.\:\-]\s*/i, "").trim();
+              } else if (/^[\(\[]?[D4घ][\)\.\:\-]/i.test(line)) {
+                opts[3] = line.replace(/^[\(\[]?[D4घ][\)\.\:\-]\s*/i, "").trim();
+              } else if (/^(Ans|उत्तर|Answer|सही\s*उत्तर)[\s\:\-\.\=\(\[]+/i.test(line)) {
+                const afterAns = line.replace(/^(Ans|उत्तर|Answer|सही\s*उत्तर)[\s\:\-\.\=\(\[]+/i, "").trim();
+                ansIdx = detectAnswerIndex(afterAns);
               }
+            }
 
-              if (qText && opts[0] && opts[1]) {
-                newQuestions.push({
-                  questionText: qText,
-                  options: opts,
-                  correctAnswer: ansIdx
-                });
-              }
+            if (qText && opts[0] && opts[1]) {
+              newQuestions.push({
+                questionText: qText,
+                options: opts,
+                correctAnswer: ansIdx
+              });
             }
           }
         }
@@ -1968,7 +1942,7 @@
       alert(`कुल ${newQuestions.length} प्रश्न लोड हो गए हैं!`);
       renderApp();
     }
-    function addNewBlankQuestion(insertIndex = null) {
+  function addNewBlankQuestion(insertIndex = null) {
       syncCurrentQuestions();
       const newQ = { questionText: "", options: ["", "", "", ""], correctAnswer: 0 };
       if (insertIndex !== null && typeof insertIndex === 'number') {
@@ -2016,7 +1990,7 @@
       }
     }
 
-    /* ==================== RESULTS (शिक्षक रिजल्ट स्क्रीन) ==================== */
+    /* ==================== RESULTS SCREEN ==================== */
     async function renderTeacherResults(c) {
       const results = await API.getResults(state.activeTeacher.id);
       results.sort(function(a, b) { return (b.createdTimestamp || 0) - (a.createdTimestamp || 0); });
@@ -2072,14 +2046,7 @@
       `;
     }
 
-    async function viewMeritList(examId) {
-      const exams = await API.getTeacherExams(state.activeTeacher.id);
-      const target = exams.find(e => e.id === examId);
-      if (target) state.meritFilterCode = target.examCode;
-      navigate("merit-list");
-    }
-
-    /* ==================== MERIT LIST & PHOTO/PDF DOWNLOAD ==================== */
+    /* ==================== MERIT LIST ==================== */
     async function renderMeritList(c) {
       const code = (state.meritFilterCode || "").trim().toUpperCase();
 
@@ -2092,7 +2059,7 @@
             </div>
             <div class="flex flex-wrap gap-2">
               <button onclick="downloadElementAsImage('meritPrintArea', 'Merit_List_${code}')" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-2 rounded-xl shadow flex items-center gap-1">
-                🖼️ फोटो (Gallery)
+                🖼️ फोटो
               </button>
               <button onclick="printOrDownloadPDF('meritPrintArea', 'Merit List - ${code}')" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3 py-2 rounded-xl shadow flex items-center gap-1">
                 📄 मेरिट PDF
@@ -2117,15 +2084,13 @@
       `;
 
       const contentBox = document.getElementById("meritListContent");
-
       if (!code) {
-        contentBox.innerHTML = '<p class="py-6 text-slate-500">ऊपर परीक्षा कोड (Exam Code) डालकर Search बटन दबाएँ।</p>';
+        contentBox.innerHTML = '<p class="py-6 text-slate-500">ऊपर परीक्षा कोड डालकर Search बटन दबाएँ।</p>';
         return;
       }
 
       try {
         const results = await API.getResultsByCode(code);
-
         if (!results || results.length === 0) {
           contentBox.innerHTML = `<p class="py-6 text-rose-500 font-bold">Exam Code "${code}" के लिए कोई रिज़ल्ट नहीं मिला।</p>`;
           return;
@@ -2143,7 +2108,6 @@
         });
 
         const examTitle = `${ranked[0].examName} (${ranked[0].class})`;
-
         contentBox.className = "bg-white rounded-2xl border p-4 space-y-2 text-left";
         contentBox.id = "meritPrintArea";
         contentBox.innerHTML = `
@@ -2155,23 +2119,21 @@
                 <div>
                   <strong class="text-sm text-slate-800">${r.studentName}</strong>
                   <span class="text-xs text-slate-500 block">
-                    ${r.rollNumber !== 'N/A' ? 'Roll: ' + r.rollNumber + ' | ' : ''}
-                    ${r.studentClass || r.class} |
+                    ${r.rollNumber !== 'N/A' ? 'Roll: ' + r.rollNumber + ' \vert{} ' : ''}${r.studentClass || r.class} |
                     <span class="font-bold text-indigo-700">${r.marks}/${r.totalMarks} (${r.percentage}%)</span>
                   </span>
                   <div class="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 font-mono mt-0.5">
                     <span>🔑 Code: <b class="text-emerald-700">${r.studentPasscode || 'N/A'}</b></span>
                     <span>⏱️ लगा समय: <b class="text-slate-700">${r.timeTaken || 'N/A'}</b></span>
                     <span>📅 तारीख: <b class="text-slate-700">${r.submissionDate || r.date || 'N/A'}</b></span>
-                    <span>🕒 समय: <b class="text-slate-700">${r.submissionTime || ''}</b></span>
                   </div>
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <button type="button" onclick="openEditStudentModal('${r.id}')" title="छात्र का विवरण सुधारें" class="text-blue-600 hover:text-blue-800 p-2 rounded-lg hover:bg-blue-50">
+                <button type="button" onclick="openEditStudentModal('${r.id}')" title="सुधारें" class="text-blue-600 hover:text-blue-800 p-2">
                   <i class="fa-solid fa-pen-to-square"></i>
                 </button>
-                <button type="button" onclick="confirmDeleteResult('${r.id}', '${r.studentName}', true)" title="डिलीट करें" class="text-rose-500 hover:text-rose-700 p-2 rounded-lg hover:bg-rose-50">
+                <button type="button" onclick="confirmDeleteResult('${r.id}', '${r.studentName}', true)" title="हटाएँ" class="text-rose-500 hover:text-rose-700 p-2">
                   <i class="fa-solid fa-trash"></i>
                 </button>
               </div>
@@ -2179,7 +2141,7 @@
           `).join("")}
         `;
       } catch (err) {
-        contentBox.innerHTML = `<p class="py-6 text-rose-500">डेटा लोड करने में समस्या आई: ${err.message}</p>`;
+        contentBox.innerHTML = `<p class="py-6 text-rose-500">डेटा लोड में समस्या: ${err.message}</p>`;
       }
     }
 
@@ -2199,26 +2161,11 @@
       mc.innerHTML = `
         <div class="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-3 text-xs">
           <h3 class="text-sm font-bold text-slate-800 border-b pb-2">✏️ विद्यार्थी रिकॉर्ड सुधारें</h3>
-          <div>
-            <label class="font-bold text-slate-600">विद्यार्थी का नाम</label>
-            <input type="text" id="edName" value="${r.studentName}" class="w-full p-2 border rounded-xl mt-1" />
-          </div>
-          <div>
-            <label class="font-bold text-slate-600">वर्ग (Class)</label>
-            <input type="text" id="edClass" value="${r.studentClass || r.class}" class="w-full p-2 border rounded-xl mt-1" />
-          </div>
-          <div>
-            <label class="font-bold text-slate-600">रोल नंबर</label>
-            <input type="text" id="edRoll" value="${r.rollNumber}" class="w-full p-2 border rounded-xl mt-1" />
-          </div>
-          <div>
-            <label class="font-bold text-slate-600">सीक्रेट कोड / पासवर्ड (Passcode)</label>
-            <input type="text" id="edPasscode" value="${r.studentPasscode || ''}" class="w-full p-2 border rounded-xl mt-1 uppercase font-mono font-bold text-emerald-700" />
-          </div>
-          <div>
-            <label class="font-bold text-slate-600">अंक (Marks)</label>
-            <input type="number" id="edMarks" value="${r.marks}" class="w-full p-2 border rounded-xl mt-1 font-bold text-indigo-700" />
-          </div>
+          <div><label class="font-bold text-slate-600">विद्यार्थी का नाम</label><input type="text" id="edName" value="${r.studentName}" class="w-full p-2 border rounded-xl mt-1" /></div>
+          <div><label class="font-bold text-slate-600">वर्ग (Class)</label><input type="text" id="edClass" value="${r.studentClass || r.class}" class="w-full p-2 border rounded-xl mt-1" /></div>
+          <div><label class="font-bold text-slate-600">रोल नंबर</label><input type="text" id="edRoll" value="${r.rollNumber}" class="w-full p-2 border rounded-xl mt-1" /></div>
+          <div><label class="font-bold text-slate-600">सीक्रेट कोड</label><input type="text" id="edPasscode" value="${r.studentPasscode || ''}" class="w-full p-2 border rounded-xl mt-1 uppercase font-mono font-bold text-emerald-700" /></div>
+          <div><label class="font-bold text-slate-600">अंक (Marks)</label><input type="number" id="edMarks" value="${r.marks}" class="w-full p-2 border rounded-xl mt-1 font-bold text-indigo-700" /></div>
           <div class="flex justify-end gap-2 pt-2">
             <button onclick="closeModal()" class="px-3 py-2 font-bold bg-slate-100 rounded-xl">रद्द करें</button>
             <button onclick="saveEditedStudentRecord('${resId}', ${r.totalMarks})" class="px-4 py-2 font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">सेव करें</button>
@@ -2262,7 +2209,7 @@
           try {
             await API.deleteSingleResult(resId);
             localStorage.removeItem("sep_cached_results_" + state.activeTeacher.id);
-            alert("रिज़ल्ट सफलतापूर्वक डिलीट कर दिया गया!");
+            alert("रिज़ल्ट डिलीट कर दिया गया!");
             renderApp();
           } catch (err) { alert(err.message); }
         },
